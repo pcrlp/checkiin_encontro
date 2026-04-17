@@ -1,13 +1,12 @@
 import streamlit as st
-import requests
+import os
 import unicodedata
 from datetime import datetime, timezone, timedelta
-import os
+from supabase import create_client, Client
 
 st.set_page_config(page_title="Check-in Encontro com Deus", page_icon="⛪", layout="centered")
 
 # ─── Config & Supabase (Sem Login) ───────────────────────────────────────────
-# Busca as chaves de forma segura, sem gerar erro caso o nome esteja diferente
 SUPABASE_URL = st.secrets.get("SUPABASE_URL", os.environ.get("SUPABASE_URL", "")).rstrip("/")
 SUPABASE_SERVICE_KEY = st.secrets.get("SUPABASE_SERVICE_KEY", os.environ.get("SUPABASE_SERVICE_KEY", ""))
 
@@ -15,13 +14,9 @@ if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
     st.error("⚠️ As chaves SUPABASE_URL e SUPABASE_SERVICE_KEY não foram encontradas nos Secrets.")
     st.stop()
 
-API = f"{SUPABASE_URL}/rest/v1"
-HEADERS = {
-    "apikey": SUPABASE_SERVICE_KEY,
-    "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
-    "Content-Type": "application/json",
-    "Prefer": "return=representation",
-}
+@st.cache_resource
+def get_sb() -> Client:
+    return create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
 BRT = timezone(timedelta(hours=-3))
 
@@ -230,37 +225,24 @@ new MutationObserver(setupInstantSearch).observe(
 </script>
 """, unsafe_allow_html=True)
 
-# ── Helpers de Banco de Dados ───────────────────────────────────────
+# ── Helpers de Banco de Dados (Supabase Cliente Oficial) ─────────────────────
 def load_participants():
-    r = requests.get(f"{API}/Participants?select=Id,Name,Category,Gender,CheckInStatus,CheckInTime&order=Name.asc", headers=HEADERS)
-    r.raise_for_status()
-    return r.json()
+    # Usando o mesmo método do app principal para garantir que funcione
+    res = get_sb().table("Participants").select("Id,Name,Category,Gender,CheckInStatus,CheckInTime").order("Name").execute()
+    return res.data
 
 def load_rooms_map():
-    r_assigns = requests.get(f"{API}/RoomAssignments?select=ParticipantId,RoomId", headers=HEADERS)
-    r_assigns.raise_for_status()
-    assigns = r_assigns.json()
-    
-    r_rooms = requests.get(f"{API}/Rooms?select=Id,Name", headers=HEADERS)
-    r_rooms.raise_for_status()
-    rooms = {rm["Id"]: rm["Name"] for rm in r_rooms.json()}
-    
-    return {a["ParticipantId"]: rooms.get(a["RoomId"], "Sem Quarto") for a in assigns}
+    assigns = get_sb().table("RoomAssignments").select("ParticipantId,RoomId").execute().data
+    rooms = get_sb().table("Rooms").select("Id,Name").execute().data
+    rooms_dict = {r["Id"]: r["Name"] for r in rooms}
+    return {a["ParticipantId"]: rooms_dict.get(a["RoomId"], "Sem Quarto") for a in assigns}
 
 def do_checkin(record_id):
     now = datetime.now(BRT).isoformat()
-    requests.patch(
-        f"{API}/Participants?Id=eq.{record_id}",
-        headers=HEADERS,
-        json={"CheckInStatus": True, "CheckInTime": now},
-    ).raise_for_status()
+    get_sb().table("Participants").update({"CheckInStatus": True, "CheckInTime": now}).eq("Id", record_id).execute()
 
 def undo_checkin(record_id):
-    requests.patch(
-        f"{API}/Participants?Id=eq.{record_id}",
-        headers=HEADERS,
-        json={"CheckInStatus": False, "CheckInTime": None},
-    ).raise_for_status()
+    get_sb().table("Participants").update({"CheckInStatus": False, "CheckInTime": None}).eq("Id", record_id).execute()
 
 def format_time(iso_str):
     if not iso_str: return ""
@@ -282,11 +264,13 @@ try:
     all_parts = load_participants()
     rooms_map = load_rooms_map()
 except Exception as e:
-    st.error(f"Erro ao conectar com o banco de dados. Verifique suas chaves no Streamlit Cloud.")
+    st.error("🚨 Erro ao buscar os dados do banco.")
+    st.caption(f"Detalhes técnicos: {e}")
+    st.warning("Verifique se as colunas 'CheckInStatus' e 'CheckInTime' foram criadas na tabela 'Participants' do Supabase.")
     st.stop()
 
 # 1. FILTRA APENAS ENCONTRISTAS
-encontristas = [p for p in all_parts if is_encounterist(p.get("Category"))]
+encontristas = [p for p in all_parts if is_encounterist(p.get("Category", ""))]
 
 # 2. CÁLCULO DAS ESTATÍSTICAS POR GÊNERO
 homens = [p for p in encontristas if p.get("Gender") == 1]
