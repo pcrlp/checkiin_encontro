@@ -2,31 +2,14 @@ import streamlit as st
 import requests
 import unicodedata
 from datetime import datetime, timezone, timedelta
+import os
 
 st.set_page_config(page_title="Check-in Encontro com Deus", page_icon="⛪", layout="centered")
 
-# ─── MÓDULO DE LOGIN ─────────────────────────────────────────────────────────
-if "authenticated" not in st.session_state: 
-    st.session_state.authenticated = False
-
-# Usa o .get() para evitar o KeyError que estava acontecendo
-APP_PASSWORD = st.secrets.get("APP_PASSWORD", "encontro2025")
-
-if not st.session_state.authenticated:
-    st.markdown("## 🔐 Check-in Encontro com Deus")
-    st.caption("Informe a senha da equipe para acessar o sistema de check-in.")
-    pwd = st.text_input("Senha", type="password", key="login_pwd")
-    if st.button("Entrar", type="primary", use_container_width=True):
-        if pwd == APP_PASSWORD:
-            st.session_state.authenticated = True
-            st.rerun()
-        else:
-            st.error("Senha incorreta.")
-    st.stop() # Para a execução aqui se não estiver logado
-
-# ─── Config & Supabase ───────────────────────────────────────────────────────
-SUPABASE_URL = st.secrets.get("SUPABASE_URL", "").rstrip("/")
-SUPABASE_SERVICE_KEY = st.secrets.get("SUPABASE_SERVICE_KEY", "")
+# ─── Config & Supabase (Sem Login) ───────────────────────────────────────────
+# Busca as chaves de forma segura, sem gerar erro caso o nome esteja diferente
+SUPABASE_URL = st.secrets.get("SUPABASE_URL", os.environ.get("SUPABASE_URL", "")).rstrip("/")
+SUPABASE_SERVICE_KEY = st.secrets.get("SUPABASE_SERVICE_KEY", os.environ.get("SUPABASE_SERVICE_KEY", ""))
 
 if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
     st.error("⚠️ As chaves SUPABASE_URL e SUPABASE_SERVICE_KEY não foram encontradas nos Secrets.")
@@ -65,7 +48,6 @@ st.markdown("""
 .block-container {padding-top: 1rem; padding-bottom: 1rem; max-width: 600px;}
 html, body, [data-testid="stAppViewContainer"] { font-family: 'Inter', sans-serif; }
 
-/* Fundo claro nativo do modo Light SaaS */
 [data-testid="stAppViewContainer"] { background: #F8FAFC; }
 [data-testid="stHeader"] { background: transparent; }
 
@@ -126,7 +108,7 @@ html, body, [data-testid="stAppViewContainer"] { font-family: 'Inter', sans-seri
 [data-testid="stTextInput"] input::placeholder { color: #94A3B8 !important; }
 [data-testid="stTextInput"] label { display: none !important; }
 
-/* ── Person row: ALL IN ONE LINE ── */
+/* ── Person row ── */
 .p-row {
     display: flex;
     align-items: center;
@@ -182,7 +164,7 @@ html, body, [data-testid="stAppViewContainer"] { font-family: 'Inter', sans-seri
 }
 .p-row .ok-icon svg { width: 16px; height: 16px; stroke: white; }
 
-/* ── Button: compact pill INSIDE the row ── */
+/* ── Buttons ── */
 [data-testid="stHorizontalBlock"] {
     flex-wrap: nowrap !important;
     gap: 0 !important;
@@ -210,8 +192,6 @@ html, body, [data-testid="stAppViewContainer"] { font-family: 'Inter', sans-seri
     background: transparent !important;
     width: 100% !important;
 }
-
-/* Botão padrão (Fazer Check-in) */
 .stButton > button:not(:disabled) {
     color: #16A34A !important;
     border: 1.5px solid #16A34A !important;
@@ -302,13 +282,13 @@ try:
     all_parts = load_participants()
     rooms_map = load_rooms_map()
 except Exception as e:
-    st.error(f"Erro ao conectar com o banco de dados. Verifique suas chaves.")
+    st.error(f"Erro ao conectar com o banco de dados. Verifique suas chaves no Streamlit Cloud.")
     st.stop()
 
 # 1. FILTRA APENAS ENCONTRISTAS
 encontristas = [p for p in all_parts if is_encounterist(p.get("Category"))]
 
-# 2. CÁLCULO DAS ESTATÍSTICAS POR GÊNERO (1 = Masculino, 2 = Feminino)
+# 2. CÁLCULO DAS ESTATÍSTICAS POR GÊNERO
 homens = [p for p in encontristas if p.get("Gender") == 1]
 mulheres = [p for p in encontristas if p.get("Gender") == 2]
 
@@ -369,7 +349,7 @@ CHECK_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-w
 for person in data_to_show:
     pid = person["Id"]
     name = person.get("Name", "Sem Nome")
-    quarto = rooms_map.get(pid, "Sem quarto atribuído")
+    quarto = rooms_map.get(pid, "Sem quarto atribuído") 
     checked = person.get("CheckInStatus", False)
     checked_at = person.get("CheckInTime", None)
 
@@ -394,7 +374,6 @@ for person in data_to_show:
 
     with col2:
         if checked:
-            # Estilo customizado para o botão de desfazer
             st.markdown("""<style>div[data-testid="stHorizontalBlock"] div:has(button:contains("DESFAZER")) button { border-color: #94A3B8 !important; color: #64748B !important; }</style>""", unsafe_allow_html=True)
             if st.button("DESFAZER", key=f"undo_{pid}"):
                 undo_checkin(pid)
