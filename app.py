@@ -1,27 +1,41 @@
 import streamlit as st
 import requests
-import os
 import unicodedata
 from datetime import datetime, timezone, timedelta
 
 st.set_page_config(page_title="Check-in Encontro com Deus", page_icon="⛪", layout="centered")
 
-# Tenta pegar dos secrets do Streamlit, se não achar, tenta das variáveis de ambiente
-try:
-    SUPABASE_URL = st.secrets["SUPABASE_URL"].rstrip("/")
-    SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
-except FileNotFoundError:
-    SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
-    SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
+# ─── MÓDULO DE LOGIN ─────────────────────────────────────────────────────────
+if "authenticated" not in st.session_state: 
+    st.session_state.authenticated = False
 
-if not SUPABASE_URL or not SUPABASE_KEY:
-    st.error("Configure SUPABASE_URL e SUPABASE_KEY nos Secrets do Streamlit.")
+# Usa o .get() para evitar o KeyError que estava acontecendo
+APP_PASSWORD = st.secrets.get("APP_PASSWORD", "encontro2025")
+
+if not st.session_state.authenticated:
+    st.markdown("## 🔐 Check-in Encontro com Deus")
+    st.caption("Informe a senha da equipe para acessar o sistema de check-in.")
+    pwd = st.text_input("Senha", type="password", key="login_pwd")
+    if st.button("Entrar", type="primary", use_container_width=True):
+        if pwd == APP_PASSWORD:
+            st.session_state.authenticated = True
+            st.rerun()
+        else:
+            st.error("Senha incorreta.")
+    st.stop() # Para a execução aqui se não estiver logado
+
+# ─── Config & Supabase ───────────────────────────────────────────────────────
+SUPABASE_URL = st.secrets.get("SUPABASE_URL", "").rstrip("/")
+SUPABASE_SERVICE_KEY = st.secrets.get("SUPABASE_SERVICE_KEY", "")
+
+if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+    st.error("⚠️ As chaves SUPABASE_URL e SUPABASE_SERVICE_KEY não foram encontradas nos Secrets.")
     st.stop()
 
 API = f"{SUPABASE_URL}/rest/v1"
 HEADERS = {
-    "apikey": SUPABASE_KEY,
-    "Authorization": f"Bearer {SUPABASE_KEY}",
+    "apikey": SUPABASE_SERVICE_KEY,
+    "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
     "Content-Type": "application/json",
     "Prefer": "return=representation",
 }
@@ -42,6 +56,7 @@ def norm(s):
 def is_encounterist(cat):
     return "encontr" in norm(cat)
 
+# ─── Custom CSS (Light Mode / Clean SaaS) ────────────────────────────────────
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
@@ -236,27 +251,21 @@ new MutationObserver(setupInstantSearch).observe(
 """, unsafe_allow_html=True)
 
 # ── Helpers de Banco de Dados ───────────────────────────────────────
-# Carrega dados diretamente da tabela Participants (a mesma do sistema de gestão)
 def load_participants():
-    # Ordena por nome para facilitar
     r = requests.get(f"{API}/Participants?select=Id,Name,Category,Gender,CheckInStatus,CheckInTime&order=Name.asc", headers=HEADERS)
     r.raise_for_status()
     return r.json()
 
-# Para pegar os quartos, precisamos ler as alocações e cruzar com os quartos criados
 def load_rooms_map():
-    # Traz alocações
     r_assigns = requests.get(f"{API}/RoomAssignments?select=ParticipantId,RoomId", headers=HEADERS)
     r_assigns.raise_for_status()
     assigns = r_assigns.json()
     
-    # Traz quartos
     r_rooms = requests.get(f"{API}/Rooms?select=Id,Name", headers=HEADERS)
     r_rooms.raise_for_status()
     rooms = {rm["Id"]: rm["Name"] for rm in r_rooms.json()}
     
-    # Mapeia ParticipantId -> Nome do Quarto
-    return {a["ParticipantId"]: rooms.get(a["RoomId"], "Quarto Desconhecido") for a in assigns}
+    return {a["ParticipantId"]: rooms.get(a["RoomId"], "Sem Quarto") for a in assigns}
 
 def do_checkin(record_id):
     now = datetime.now(BRT).isoformat()
@@ -293,7 +302,7 @@ try:
     all_parts = load_participants()
     rooms_map = load_rooms_map()
 except Exception as e:
-    st.error(f"Erro ao conectar com o banco de dados: {e}")
+    st.error(f"Erro ao conectar com o banco de dados. Verifique suas chaves.")
     st.stop()
 
 # 1. FILTRA APENAS ENCONTRISTAS
@@ -360,7 +369,7 @@ CHECK_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-w
 for person in data_to_show:
     pid = person["Id"]
     name = person.get("Name", "Sem Nome")
-    quarto = rooms_map.get(pid, "Sem quarto atribuído") # Busca do mapa de quartos
+    quarto = rooms_map.get(pid, "Sem quarto atribuído")
     checked = person.get("CheckInStatus", False)
     checked_at = person.get("CheckInTime", None)
 
