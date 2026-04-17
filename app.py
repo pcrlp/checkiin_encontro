@@ -3,6 +3,7 @@ import os
 import unicodedata
 from datetime import datetime, timezone, timedelta
 from supabase import create_client, Client
+import streamlit.components.v1 as components
 
 st.set_page_config(page_title="Check-in Encontro com Deus", page_icon="⛪", layout="centered")
 
@@ -226,16 +227,29 @@ new MutationObserver(setupInstantSearch).observe(
 """, unsafe_allow_html=True)
 
 # ── Helpers de Banco de Dados (Supabase Cliente Oficial) ─────────────────────
-def load_participants():
-    # Usando o mesmo método do app principal para garantir que funcione
-    res = get_sb().table("Participants").select("Id,Name,Category,Gender,CheckInStatus,CheckInTime").order("Name").execute()
-    return res.data
+@st.cache_data(ttl=5) # Cache leve para não sobrecarregar o banco, mas manter atualizado
+def load_all_data():
+    parts_res = get_sb().table("Participants").select("Id,Name,Category,Gender,CheckInStatus,CheckInTime").order("Name").execute()
+    assigns_res = get_sb().table("RoomAssignments").select("ParticipantId,RoomId").execute()
+    rooms_res = get_sb().table("Rooms").select("Id,Name,LeaderId").execute()
+    
+    parts = parts_res.data
+    assigns = assigns_res.data
+    rooms = rooms_res.data
+    
+    return parts, assigns, rooms
 
-def load_rooms_map():
-    assigns = get_sb().table("RoomAssignments").select("ParticipantId,RoomId").execute().data
-    rooms = get_sb().table("Rooms").select("Id,Name").execute().data
-    rooms_dict = {r["Id"]: r["Name"] for r in rooms}
-    return {a["ParticipantId"]: rooms_dict.get(a["RoomId"], "Sem Quarto") for a in assigns}
+def build_rooms_map(parts, assigns, rooms):
+    # Dicionário para achar o nome da pessoa pelo ID dela (pra achar o nome do líder)
+    parts_dict = {p["Id"]: p["Name"] for p in parts}
+    
+    # Monta a string do quarto: "Nome do Quarto - Líder: Nome do Líder"
+    rooms_info = {}
+    for r in rooms:
+        leader_name = parts_dict.get(r.get("LeaderId"), "Nenhum") if r.get("LeaderId") else "Nenhum"
+        rooms_info[r["Id"]] = f"{r['Name']} — Líd: {leader_name}"
+        
+    return {a["ParticipantId"]: rooms_info.get(a["RoomId"], "Sem Quarto") for a in assigns}
 
 def do_checkin(record_id):
     now = datetime.now(BRT).isoformat()
@@ -261,8 +275,8 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 try:
-    all_parts = load_participants()
-    rooms_map = load_rooms_map()
+    all_parts, assigns, rooms = load_all_data()
+    rooms_map = build_rooms_map(all_parts, assigns, rooms)
 except Exception as e:
     st.error("🚨 Erro ao buscar os dados do banco.")
     st.caption(f"Detalhes técnicos: {e}")
@@ -361,8 +375,11 @@ for person in data_to_show:
             st.markdown("""<style>div[data-testid="stHorizontalBlock"] div:has(button:contains("DESFAZER")) button { border-color: #94A3B8 !important; color: #64748B !important; }</style>""", unsafe_allow_html=True)
             if st.button("DESFAZER", key=f"undo_{pid}"):
                 undo_checkin(pid)
+                # Limpa o cache para forçar a busca da alteração instantaneamente
+                load_all_data.clear()
                 st.rerun()
         else:
             if st.button("ENTRAR", key=f"chk_{pid}"):
                 do_checkin(pid)
+                load_all_data.clear()
                 st.rerun()
